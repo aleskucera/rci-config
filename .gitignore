@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# -o "%.9i %.9P %.30j %.8u %.2t %.10M %.6D %R" | awk '{print $1}' | tail -n +2
+squeue -u $USER
