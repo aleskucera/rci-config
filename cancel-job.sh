@@ -9,9 +9,9 @@ if [ -z "$user_jobs" ]; then
     exit 1
 fi
 
-# Print jobs with line numbers
+# Print jobs with line numbers, start from the second line
 echo "Jobs for user $USER:"
-echo "$user_jobs" | awk '{print NR ". " $0}'
+echo "$user_jobs" | awk 'NR > 1 {print NR-1, $0}'
 
 # Prompt the user to select a job
 read -p "Enter the number of the job to cancel: " job_number
