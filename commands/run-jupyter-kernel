@@ -1,0 +1,124 @@
+#!/bin/bash
+
+PORT=9999
+user=$(whoami)
+HOME_DIR="/home/$user"
+NODE_FILE="$HOME_DIR/node_name.tmp"
+LOG_FILE="$HOME_DIR/log_path.tmp"
+SETUP_DIR="$HOME_DIR/rci-setup"
+SRC_DIR="$SETUP_DIR/src"
+
+echo "$LOG_FILE"
+echo "$NODE_FILE"
+
+
+# Get the names of the project in the 'projects' directory
+projects=("$HOME_DIR/projects"/*)
+
+echo ""
+echo "==== Running Remote Jupyter Kernel ===="
+echo ""
+
+# Print the names of the projects
+echo "Choose the project for which you"
+echo "wish to run the remote Jupyter kernel:"
+echo ""
+
+# Make user choose the project by number. List all projects and enumerate them from 1 to n
+for i in "${!projects[@]}"; do
+    echo "[$i] $(basename "${projects[$i]}")"
+done
+
+# Prompt the user to select a project
+echo ""
+read -r -p "Enter the number of the project: " project_number
+echo ""
+
+# Validate user input
+if ! [[ "$project_number" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: Invalid input: Please enter a number."
+    exit 1
+fi
+
+# Check if the project number is valid
+if [ "$project_number" -ge "${#projects[@]}" ]; then
+    echo "ERROR: Invalid project number."
+    exit 1
+fi
+
+# Get the project directory
+project_dir="${projects[$project_number]}"
+project_name=$(basename "$project_dir")
+env_file="${project_dir}/.env"
+log_dir="${project_dir}/rci-logs"
+
+# Check if the project directory contains a .env file
+if [ ! -f "$env_file" ]; then
+    echo "WARNING: The project directory does not contain a .env file."
+    read -r -p "Do you want to load base environment? (y/n) " response
+    echo ""
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        env_file="${SETUP_DIR}/envs/base.sh"
+    else
+      echo "Aborting..."
+      exit 1
+    fi
+fi
+
+# Select number of cpus
+read -r -p "Enter the number of CPUs (default=1): " cpus
+echo ""
+
+# If the user pressed Enter without providing a value, set the number of CPUs to 1
+if [ -z "$cpus" ]; then
+    cpus=1
+fi
+
+# Fill the jinja2 template with the project name and the number of CPUs
+python $SRC_DIR/create_job_file.py \
+    --port "$PORT" \
+    --project_name "$project_name" \
+    --number_of_cpus "$cpus" \
+    --env_file "$env_file" \
+    --log_dir "$log_dir" \
+    --project_dir "$project_dir" \
+    --log_file "$LOG_FILE" \
+    --node_file "$NODE_FILE"
+
+# Submit the job
+echo "Submitting the job..."
+sbatch "${SETUP_DIR}/jupyter-jobs/${project_name}.sh"
+
+
+# Wait for the node name file to be created
+echo "Waiting for the job to start..."
+while [[ ! -f $NODE_FILE ]] || [[ ! -f $LOG_FILE ]]; do
+    sleep 1
+done
+# Read the node name from the file
+node=$(cat "$NODE_FILE")
+log_path=$(cat "$LOG_FILE")
+
+# Remove the temporary files
+rm "$NODE_FILE"
+rm "$LOG_FILE"
+
+echo ""
+echo "Command to create your ssh tunnel:"
+echo -e " ssh -N -L $PORT:$node:$PORT $user@login.rci.cvut.cz"
+
+echo ""
+echo "Then the Jupyter notebook will be available at:"
+echo -e " http://localhost:$PORT"
+
+echo ""
+echo "The logs are available at:"
+echo " $log_path"
+
+echo ""
+echo "==== Remote Jupyter Kernel Running ===="
+echo ""
+
+
+
+

@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Get the user's jobs queue
+user_jobs=$(squeue -u $USER)
+
+# Check if there are no jobs (only the header line is present)
+if [ $(echo "$user_jobs" | wc -l) -eq 1 ]; then
+    echo "No jobs found for user $USER"
+    exit 1
+fi
+
+# Print jobs
+echo "Jobs for user $USER:"
+echo "$user_jobs"

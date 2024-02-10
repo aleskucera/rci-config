@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --partition gpu
+#SBATCH --gpus-per-node 1
+#SBATCH --nodes 1
+#SBATCH --ntasks-per-node {{ number_of_cpus }}
+#SBATCH --time 1-0:00:00
+#SBATCH --job-name jupyter-{{ project_name }}
+#SBATCH --output {{ log_dir }}/jupyter-%j.log
+
+node=$(hostname -s)
+user=$(whoami)
+
+# Paste the node name and job id to the temporary files
+echo ${node} > {{ node_file }}
+echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
+
+# Load modules
+source {{ env_file }}
+
+# Run Jupyter
+# jupyter notebook --no-browser --port={{ port }} --ip=${node} --NotebookApp.token='' --NotebookApp.password='' --allow-root
+jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
