@@ -68,7 +68,7 @@ rendered_template = template.render(port=port,
                                     log_file=log_file)
 
 # Create the job file
-job_file_path = f"jupyter-jobs/{project_name}.sh"
+job_file_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", f"{project_name}.sh")
 with open(job_file_path, "w") as job_file:
     job_file.write(rendered_template)
 

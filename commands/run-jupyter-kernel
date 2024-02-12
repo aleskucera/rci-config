@@ -8,9 +8,9 @@ LOG_FILE="$HOME_DIR/log_path.tmp"
 SETUP_DIR="$HOME_DIR/rci-setup"
 SRC_DIR="$SETUP_DIR/src"
 
-echo "$LOG_FILE"
-echo "$NODE_FILE"
-
+# Make sure that the temporary files do not exist
+rm -f "$NODE_FILE"
+rm -f "$LOG_FILE"
 
 # Get the names of the project in the 'projects' directory
 projects=("$HOME_DIR/projects"/*)
