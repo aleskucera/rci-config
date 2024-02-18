@@ -3,3 +3,4 @@
 # Ignore all files in the jupyter-jobs directory but template.j2
 jupyter-jobs/*
 !jupyter-jobs/template.j2
+!jupyter-jobs/singularity-template.j2
