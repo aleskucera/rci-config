@@ -37,6 +37,10 @@ my_parser.add_argument('--log_file', '-lf',
                             type=str,
                             required=True,
                             help='the log file to use')
+my_parser.add_argument('--singularity_file', '-sf',
+                            type=str,
+                            required=True,
+                            help='the singularity file to use')
 
 # Parse the arguments
 args = my_parser.parse_args()
@@ -50,10 +54,16 @@ node_file = args.node_file
 project_dir = args.project_dir
 project_name = args.project_name
 number_of_cpus = args.number_of_cpus
+singularity_file = args.singularity_file
 
 # Load the template
 file_path = os.path.abspath(__file__)
-template_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", "template.j2")
+
+if env_file == "null" and singularity_file != "null":
+    template_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", "singularity-template.j2")
+else:
+    template_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", "template.j2")
+
 template_string = open(template_path).read()
 template = jinja2.Template(template_string)
 
@@ -65,7 +75,8 @@ rendered_template = template.render(port=port,
                                     project_dir=project_dir,
                                     node_file=node_file,
                                     log_dir=log_dir,
-                                    log_file=log_file)
+                                    log_file=log_file,
+                                    singularity_file=singularity_file)
 
 # Create the job file
 job_file_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", f"{project_name}.sh")

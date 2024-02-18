@@ -1,3 +1,4 @@
+ml PyTorch-Geometric/2.3.1-foss-2022a-CUDA-11.7.0
 ml torchvision/0.16.0-foss-2022a-CUDA-11.7.0
 ml PyTorch-Lightning/2.1.0-foss-2022a-CUDA-11.7.0
 ml JupyterLab/3.5.0-GCCcore-11.3.0

@@ -10,6 +10,10 @@
 node=$(hostname -s)
 user=$(whoami)
 
+# Add project directory to the python path
+export PYTHONPATH={{ project_dir }}:$PYTHONPATH
+export BASE_PATH="/mnt/personal/${user}/{{ project_dir }}"
+
 # Paste the node name and job id to the temporary files
 echo ${node} > {{ node_file }}
 echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}

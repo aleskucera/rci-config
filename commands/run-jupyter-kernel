@@ -24,9 +24,9 @@ echo "Choose the project for which you"
 echo "wish to run the remote Jupyter kernel:"
 echo ""
 
-# Make user choose the project by number. List all projects and enumerate them from 1 to n
-for i in "${!projects[@]}"; do
-    echo "[$i] $(basename "${projects[$i]}")"
+# Enumerate projects from 1 to n
+for ((i = 1; i <= ${#projects[@]}; i++)); do
+    echo "[$i] $(basename "${projects[$((i-1))]}")"
 done
 
 # Prompt the user to select a project
@@ -35,34 +35,62 @@ read -r -p "Enter the number of the project: " project_number
 echo ""
 
 # Validate user input
-if ! [[ "$project_number" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: Invalid input: Please enter a number."
+if ! [[ "$project_number" =~ ^[0-9]+$ ]] || [ "$project_number" -lt 1 ] || [ "$project_number" -gt "${#projects[@]}" ]; then
+    echo "ERROR: Invalid input: Please enter a valid number."
     exit 1
 fi
 
-# Check if the project number is valid
-if [ "$project_number" -ge "${#projects[@]}" ]; then
-    echo "ERROR: Invalid project number."
-    exit 1
-fi
+# Adjust project number to match array indexing
+project_number=$((project_number - 1))
 
 # Get the project directory
 project_dir="${projects[$project_number]}"
 project_name=$(basename "$project_dir")
-env_file="${project_dir}/.env"
 log_dir="${project_dir}/rci-logs"
 
-# Check if the project directory contains a .env file
-if [ ! -f "$env_file" ]; then
-    echo "WARNING: The project directory does not contain a .env file."
-    read -r -p "Do you want to load base environment? (y/n) " response
-    echo ""
-    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        env_file="${SETUP_DIR}/envs/base.sh"
-    else
-      echo "Aborting..."
-      exit 1
+# Ask if the user wants to use the .env file or singularity image
+echo "Do you want to use the .env file or the singularity image?"
+echo "[1] .env file"
+echo "[2] Singularity image"
+echo ""
+
+read -r -p "Enter the number of the option: " option
+echo ""
+
+env_file=null
+singularity_file=null
+
+# If options is 1, use the .env file, if it is 2, use the singularity image
+if [ "$option" -eq 1 ]; then
+    env_file="${projects[$project_number]}/.env"
+    # Check if the project directory contains a .env file
+    if [ ! -f "$env_file" ]; then
+        echo "WARNING: The file .env does not exist in the project directory."
+        read -r -p "Do you want to load base environment? (y/n) " response
+        echo ""
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            env_file="${SETUP_DIR}/envs/base.sh"
+        else
+          echo "Aborting..."
+          exit 1
+        fi
     fi
+elif [ "$option" -eq 2 ]; then
+    singularity_file="${HOME_DIR}/envs/${project_name}.sif"
+    if [ ! -f "$singularity_file" ]; then
+        echo "WARNING: The file $singularity_file does not exist."
+        read -r -p "Do you want to load base singularity image? (y/n) " response
+        echo ""
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            env_file="${HOME_DIR}/envs/base.sif"
+        else
+          echo "Aborting..."
+          exit 1
+        fi
+    fi
+else
+    echo "ERROR: Invalid option."
+    exit 1
 fi
 
 # Select number of cpus
@@ -80,6 +108,7 @@ python $SRC_DIR/create_job_file.py \
     --project_name "$project_name" \
     --number_of_cpus "$cpus" \
     --env_file "$env_file" \
+    --singularity_file "$singularity_file" \
     --log_dir "$log_dir" \
     --project_dir "$project_dir" \
     --log_file "$LOG_FILE" \
