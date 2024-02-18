@@ -60,9 +60,9 @@ singularity_file = args.singularity_file
 file_path = os.path.abspath(__file__)
 
 if env_file == "null" and singularity_file != "null":
-    template_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", "singularity-template.j2")
+    template_path = os.path.join(os.path.dirname(file_path), "..", "jobs", "jupyter-singularity.j2")
 else:
-    template_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", "template.j2")
+    template_path = os.path.join(os.path.dirname(file_path), "..", "jobs", "jupyter.j2")
 
 template_string = open(template_path).read()
 template = jinja2.Template(template_string)
@@ -79,7 +79,7 @@ rendered_template = template.render(port=port,
                                     singularity_file=singularity_file)
 
 # Create the job file
-job_file_path = os.path.join(os.path.dirname(file_path), "..", "jupyter-jobs", f"{project_name}.sh")
+job_file_path = os.path.join(os.path.dirname(file_path), "..", "jobs", f"{project_name}.sh")
 with open(job_file_path, "w") as job_file:
     job_file.write(rendered_template)
 

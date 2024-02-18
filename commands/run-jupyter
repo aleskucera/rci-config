@@ -3,9 +3,9 @@
 PORT=9999
 user=$(whoami)
 HOME_DIR="/home/$user"
-NODE_FILE="$HOME_DIR/node_name.tmp"
-LOG_FILE="$HOME_DIR/log_path.tmp"
-SETUP_DIR="$HOME_DIR/rci-setup"
+NODE_FILE="$HOME_DIR/node-name.tmp"
+LOG_FILE="$HOME_DIR/log-path.tmp"
+SETUP_DIR="$HOME_DIR/rci-config"
 SRC_DIR="$SETUP_DIR/src"
 
 # Make sure that the temporary files do not exist
@@ -116,7 +116,7 @@ python $SRC_DIR/create_job_file.py \
 
 # Submit the job
 echo "Submitting the job..."
-sbatch "${SETUP_DIR}/jupyter-jobs/${project_name}.sh"
+sbatch "${SETUP_DIR}/jobs/${project_name}.sh"
 
 
 # Wait for the node name file to be created
