@@ -3,6 +3,7 @@
 PORT=9999
 user=$(whoami)
 HOME_DIR="/home/$user"
+STORAGE_DIR="/mnt/personal/$user"
 NODE_FILE="$HOME_DIR/node-name.tmp"
 LOG_FILE="$HOME_DIR/log-path.tmp"
 SETUP_DIR="$HOME_DIR/rci-config"
@@ -76,13 +77,13 @@ if [ "$option" -eq 1 ]; then
         fi
     fi
 elif [ "$option" -eq 2 ]; then
-    singularity_file="${HOME_DIR}/envs/${project_name}.sif"
+    singularity_file="${STORAGE_DIR}/singularity/${project_name}.sif"
     if [ ! -f "$singularity_file" ]; then
         echo "WARNING: The file $singularity_file does not exist."
         read -r -p "Do you want to load base singularity image? (y/n) " response
         echo ""
         if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            env_file="${HOME_DIR}/envs/base.sif"
+            env_file="${STORAGE_DIR}/singularity/base.sif"
         else
           echo "Aborting..."
           exit 1
