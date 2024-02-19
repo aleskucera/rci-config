@@ -9,10 +9,10 @@
 
 node=$(hostname -s)
 user=$(whoami)
-
+kuceral4
 # Add project directory to the python path
 export PYTHONPATH={{ project_dir }}:$PYTHONPATH
-export BASE_PATH="/mnt/personal/${user}/{{ project_dir }}"
+export BASE_PATH="/mnt/personal/${user}/{{ project_name }}"
 
 # Paste the node name and job id to the temporary files
 echo ${node} > {{ node_file }}
