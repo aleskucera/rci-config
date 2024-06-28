@@ -1,0 +1,49 @@
+#!/bin/bash
+
+echo ""
+echo "==== Running Interactive Job Kernel ===="
+echo ""
+
+# Select the partition for the job (gpufast, cpufast, amdfast, amdgpufast)
+partitions=("gpufast" "amdgpufast" "cpufast" "amdfast" )
+
+# Print partition with number line
+for ((i = 1; i <= ${#projects[@]}; i++)); do
+    echo "[$i] ${partitions[$((i-1))]}"
+done
+
+# Get the number of the partition
+echo ""
+read -r -p "Enter the number of the partition: " partition_number
+echo ""
+
+# Validate user input
+if [ "$partition_number" -lt 1 ] || [ "$partition_number" -gt ${#partitions[@]} ]; then
+    echo "Invalid partition number. Aborting..."
+    exit 1
+fi
+
+# If partition with GPU selected add the --gpus-per-node flag
+partition=${partitions[$((partition_number - 1))]}
+
+if [ "$partition" == "gpufast" ] || [ "$partition" == "amdgpufast" ]; then
+    echo ""
+    read -r -p "Select the number of GPUs: " gpus
+    echo ""
+else
+    gpus=0
+fi
+
+# Select the amount of memory for the job
+echo ""
+read -r -p "Select the amount of memory: " memory
+echo ""
+
+# Select the number of CPUs for the job
+echo ""
+read -r -p "Select the number of CPUs: " cpus
+echo ""
+
+# Run the job
+srun --partition "$partition" --gpus-per-node "$gpus" --cpus-per-task "$cpus" --mem "$memory" --pty bash -i
+
