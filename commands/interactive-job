@@ -1,14 +1,14 @@
 #!/bin/bash
 
 echo ""
-echo "==== Running Interactive Job Kernel ===="
+echo "==== Running Interactive Job ===="
 echo ""
 
 # Select the partition for the job (gpufast, cpufast, amdfast, amdgpufast)
 partitions=("gpufast" "amdgpufast" "cpufast" "amdfast" )
 
 # Print partition with number line
-for ((i = 1; i <= ${#projects[@]}; i++)); do
+for ((i = 1; i <= ${#partitions[@]}; i++)); do
     echo "[$i] ${partitions[$((i-1))]}"
 done
 
