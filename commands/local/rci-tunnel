@@ -1,0 +1,18 @@
+#!/bin/bash
+
+echo ""
+echo "==== Creating SSH Tunnel to RCI Cluster ===="
+echo ""
+
+echo ""
+read -r -p "Enter the RCI node: " node
+read -r -p "Enter the port: " port
+echo ""
+
+echo "Creating SSH tunnel to ${node} on port ${port}..."
+
+ssh -N -L ${port}:${node}:${port} ${RCI_USER}@login.rci.cvut.cz
+
+echo "SSH tunnel created."
+
+# ssh -L 7865:localhost:7865 -J kuceral4@login.rci.cvut.cz kuceral4@n26
