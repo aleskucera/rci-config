@@ -2,7 +2,7 @@
 
 HOME_DIR="/home/$(whoami)"
 BASHRC_FILE="$HOME_DIR/.bashrc"
-RCI_COMMANDS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")commands/rci"
+RCI_COMMANDS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")/commands/rci"
 
 # Check if projects directory exists
 if [ ! -d "$HOME_DIR/projects" ]; then
