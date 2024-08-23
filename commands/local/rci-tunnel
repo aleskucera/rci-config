@@ -15,4 +15,3 @@ ssh -N -L ${port}:${node}:${port} ${RCI_USER}@login.rci.cvut.cz
 
 echo "SSH tunnel created."
 
-# ssh -L 7865:localhost:7865 -J kuceral4@login.rci.cvut.cz kuceral4@n26
