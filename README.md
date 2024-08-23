@@ -57,6 +57,12 @@ ml torchvision/0.16.0-foss-2022a-CUDA-11.7.0
 ml PyTorch-Lightning/2.1.0-foss-2022a-CUDA-11.7.0
 ```
 
+To load the modules specified in the `.env` file as stated above use the following command
+
+```bash
+source <path_to_project>/.env
+```
+
 The script is then stored in the `.env` file in the project directory. Alternatively, users can utilize custom Singularity containers stored in the `/mnt/personal/<user>/singularity` directory, following a specific structure.
 
 ### Home directory - `/home/<user>`
@@ -87,17 +93,18 @@ The personal storage is used typically for storing datasets, singularity contain
 
 ## Cluster Configuration
 
-To configure the cluster (which involves changing the `.bashrc` file and making executables from the custom commands), use the `run.sh` script.
+To configure the cluster (which involves making executables from the custom commands), use the `configure_rci.sh` script.
 
 ```bash
-bash run.sh
+bash configure_rci.sh
 ```
 
 ## Usage
 
 This repository provides the following commands for use:
 
-- `my-jobs`: Lists the user's jobs.
 - `cancel-job`: Allows the user to interactively cancel a job.
-- `run-jupyter`: Executes a Jupyter notebook on the cluster, accessible from the user's computer.
 - `connect-job`: Allows the user to connect to running interactive job.
+- `interactive-job`: Allows the user to create and specify hardware needed for interactive job.
+- `my-jobs`: Lists the user's jobs.
+- `run-jupyter`: Executes a Jupyter notebook on the cluster, accessible from the user's computer.
