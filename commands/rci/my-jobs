@@ -12,3 +12,4 @@ fi
 # Print jobs
 echo "Jobs for user $USER:"
 echo "$user_jobs"
+

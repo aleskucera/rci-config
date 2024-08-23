@@ -39,3 +39,4 @@ fi
 # Cancel the selected job
 scancel "$job_id"
 echo "Job $job_id has been cancelled."
+
