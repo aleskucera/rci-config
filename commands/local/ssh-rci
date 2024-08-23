@@ -1,3 +1,4 @@
 #!/bin/bash
 
 ssh ${RCI_USER}@login3.rci.cvut.cz
+

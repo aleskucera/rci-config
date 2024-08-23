@@ -19,7 +19,7 @@ echo "$user_jobs" | awk 'NR > 1 {print "["NR-1"]", $0}'
 echo ""
 
 # Prompt the user to select a job
-read -r -p "Enter the number of the job to cancel: " job_number
+read -r -p "Enter the number of the job to connect to: " job_number
 
 # Validate user input
 if ! [[ "$job_number" =~ ^[0-9]+$ ]]; then
@@ -36,5 +36,6 @@ if [ -z "$job_id" ]; then
     exit 1
 fi
 
-# Cancel the selected job
+# Connect to the selected job
 srun --pty --overlap --jobid "$job_id" bash
+

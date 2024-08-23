@@ -100,3 +100,4 @@ This repository provides the following commands for use:
 - `my-jobs`: Lists the user's jobs.
 - `cancel-job`: Allows the user to interactively cancel a job.
 - `run-jupyter`: Executes a Jupyter notebook on the cluster, accessible from the user's computer.
+- `connect-job`: Allows the user to connect to running interactive job.
