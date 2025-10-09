@@ -15,13 +15,19 @@ export PYTHONPATH={{ project_dir }}:$PYTHONPATH
 export BASE_PATH="/mnt/personal/${user}/{{ project_name }}"
 
 # Paste the node name and job id to the temporary files
-echo ${node} > {{ node_file }}
-echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
+echo ${node} node_file }} >{{
+echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" log_file }} >{{
 
 # Load modules
 source {{ env_file }}
-ml notebook/7.0.2-GCCcore-12.3.0
 
 # Run Jupyter
 # jupyter notebook --no-browser --port={{ port }} --ip=${node} --NotebookApp.token='' --NotebookApp.password='' --allow-root
-jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+if command -v jupyter &>/dev/null; then
+  jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif command -v jupyter-notebook &>/dev/null; then
+  jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+else
+  echo "Error: Jupyter is not available in this environment."
+  exit 1
+fi
