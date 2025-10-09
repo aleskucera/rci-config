@@ -20,6 +20,7 @@ echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
 
 # Load modules
 source {{ env_file }}
+ml notebook/7.0.2-GCCcore-12.3.0
 
 # Run Jupyter
-singularity run --nv --bind /mnt:/mnt {{ singularity_file }} jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+singularity run --nv --bind /mnt:/mnt {{ singularity_file }} jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}

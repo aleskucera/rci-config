@@ -9,7 +9,7 @@
 
 node=$(hostname -s)
 user=$(whoami)
-kuceral4
+
 # Add project directory to the python path
 export PYTHONPATH={{ project_dir }}:$PYTHONPATH
 export BASE_PATH="/mnt/personal/${user}/{{ project_name }}"
@@ -20,7 +20,8 @@ echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
 
 # Load modules
 source {{ env_file }}
+ml notebook/7.0.2-GCCcore-12.3.0
 
 # Run Jupyter
 # jupyter notebook --no-browser --port={{ port }} --ip=${node} --NotebookApp.token='' --NotebookApp.password='' --allow-root
-jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
