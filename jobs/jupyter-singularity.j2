@@ -15,11 +15,20 @@ export PYTHONPATH={{ project_dir }}:$PYTHONPATH
 export BASE_PATH="/mnt/personal/${user}/{{ project_dir }}"
 
 # Paste the node name and job id to the temporary files
-echo ${node} > {{ node_file }}
-echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
+echo ${node} node_file }} >{{
+echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" log_file }} >{{
 
 # Load modules
 source {{ env_file }}
 
 # Run Jupyter
-singularity run --nv --bind /mnt:/mnt {{ singularity_file }} jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+singularity run --nv --bind /mnt:/mnt {{ singularity_file }} bash -c "
+if command -v jupyter &> /dev/null; then
+    jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif command -v jupyter-notebook &> /dev/null; then
+    jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+else
+    echo 'Error: Neither jupyter nor jupyter-notebook found inside the container.'
+    exit 1
+fi
+"
