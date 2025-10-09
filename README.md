@@ -93,7 +93,7 @@ The personal storage is used typically for storing datasets, singularity contain
 
 ## Cluster Configuration
 
-To configure the cluster (which involves making executables from the custom commands), use the `configure_rci.sh` script.
+To configure the cluster (which involves mainly configuring path and making executables from the custom commands), use the `configure_rci.sh` script.
 
 ```bash
 bash configure_rci.sh
