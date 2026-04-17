@@ -41,6 +41,18 @@ my_parser.add_argument('--singularity_file', '-sf',
                             type=str,
                             required=True,
                             help='the singularity file to use')
+my_parser.add_argument('--partition',
+                            type=str,
+                            required=True,
+                            help='the SLURM partition to submit to')
+my_parser.add_argument('--gpus',
+                            type=int,
+                            required=True,
+                            help='the number of GPUs (0 for CPU-only)')
+my_parser.add_argument('--memory',
+                            type=str,
+                            required=True,
+                            help='memory request, e.g. 8G')
 
 # Parse the arguments
 args = my_parser.parse_args()
@@ -55,6 +67,9 @@ project_dir = args.project_dir
 project_name = args.project_name
 number_of_cpus = args.number_of_cpus
 singularity_file = args.singularity_file
+partition = args.partition
+gpus = args.gpus
+memory = args.memory
 
 # Load the template
 file_path = os.path.abspath(__file__)
@@ -76,7 +91,10 @@ rendered_template = template.render(port=port,
                                     node_file=node_file,
                                     log_dir=log_dir,
                                     log_file=log_file,
-                                    singularity_file=singularity_file)
+                                    singularity_file=singularity_file,
+                                    partition=partition,
+                                    gpus=gpus,
+                                    memory=memory)
 
 # Create the job file
 job_file_path = os.path.join(os.path.dirname(file_path), "..", "jobs", f"{project_name}.sh")

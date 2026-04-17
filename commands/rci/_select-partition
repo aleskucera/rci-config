@@ -1,0 +1,115 @@
+#!/bin/bash
+# Shared helper: dynamically list interactive-capable (fast) partitions,
+# show availability, prompt for selection, and resolve "any-gpu" / "any-cpu"
+# to the fast partition with the most idle nodes.
+#
+# On success, sets:
+#   $partition      - final partition name (single, for SLURM submission)
+#   $choice_is_gpu  - 1 if the chosen partition has GPUs, else 0
+# On invalid input, exits with code 1 (terminates the calling script).
+#
+# Usage:  source _select-partition
+
+declare -a partitions=()
+declare -a partition_is_gpu=()
+
+while read -r name gres; do
+    name="${name%\*}"
+    partitions+=("$name")
+    if [[ "$gres" == *"gpu:"* ]]; then
+        partition_is_gpu+=(1)
+    else
+        partition_is_gpu+=(0)
+    fi
+done < <(sinfo --noheader --format="%P %G %a %l" 2>/dev/null \
+    | awk '
+        function to_min(t,   a, b) {
+            if (t ~ /-/) { split(t, a, "-"); split(a[2], b, ":"); return a[1]*1440 + b[1]*60 + b[2] }
+            split(t, b, ":"); return b[1]*60 + b[2]
+        }
+        $3 == "up" && to_min($4) <= 240 { print $1, $2 }
+    ' | sort -u -k1,1)
+
+if [ "${#partitions[@]}" -eq 0 ]; then
+    echo "No interactive-capable (*fast) partitions available." >&2
+    exit 1
+fi
+
+declare -a gpu_part_names=()
+declare -a cpu_part_names=()
+for ((i = 0; i < ${#partitions[@]}; i++)); do
+    if [ "${partition_is_gpu[$i]}" -eq 1 ]; then
+        gpu_part_names+=("${partitions[$i]}")
+    else
+        cpu_part_names+=("${partitions[$i]}")
+    fi
+done
+[ ${#gpu_part_names[@]} -gt 0 ] && partitions+=("any-gpu") && partition_is_gpu+=(1)
+[ ${#cpu_part_names[@]} -gt 0 ] && partitions+=("any-cpu") && partition_is_gpu+=(0)
+
+echo "Partition availability:"
+declare -A idle_counts
+while IFS= read -r line; do
+    echo "$line"
+    name=$(echo "$line" | awk '{print $1}' | xargs)
+    idle=$(echo "$line" | grep -oP 'idle=\K[0-9]+' || true)
+    idle_counts["$name"]="${idle:-0}"
+done < <(sinfo --noheader --format="%P %t %D %l %G" 2>/dev/null \
+    | awk '
+        function to_min(t,   a, b) {
+            if (t ~ /-/) { split(t, a, "-"); split(a[2], b, ":"); return a[1]*1440 + b[1]*60 + b[2] }
+            split(t, b, ":"); return b[1]*60 + b[2]
+        }
+        {
+            p = $1; sub(/\*$/, "", p)
+            state = $2; count = $3
+            if (to_min($4) > 240) next
+            if (state == "idle") idle[p] += count
+            total[p] += count
+            gres[p] = $5; limit[p] = $4
+        }
+        END {
+            for (p in total)
+                printf "  %-16s  idle=%-3d  total=%-3d  limit=%-12s  gres=%s\n",
+                    p, idle[p]+0, total[p], limit[p], gres[p]
+        }
+    ' | sort)
+echo ""
+
+_pick_best_partition() {
+    local -n _names=$1
+    local best="${_names[0]}"
+    local best_idle=${idle_counts["${_names[0]:-}"]:-0}
+    for p in "${_names[@]}"; do
+        local n=${idle_counts["$p"]:-0}
+        if [ "$n" -gt "$best_idle" ]; then
+            best="$p"; best_idle="$n"
+        fi
+    done
+    echo "$best"
+}
+
+for ((i = 1; i <= ${#partitions[@]}; i++)); do
+    echo "[$i] ${partitions[$((i-1))]}"
+done
+
+echo ""
+read -r -p "Enter the number of the partition: " partition_number
+
+if ! [[ "$partition_number" =~ ^[0-9]+$ ]] || [ "$partition_number" -lt 1 ] || [ "$partition_number" -gt ${#partitions[@]} ]; then
+    echo "Invalid partition number. Aborting..."
+    exit 1
+fi
+
+partition_choice=${partitions[$((partition_number - 1))]}
+choice_is_gpu=${partition_is_gpu[$((partition_number - 1))]}
+
+if [ "$partition_choice" == "any-gpu" ]; then
+    partition=$(_pick_best_partition gpu_part_names)
+    echo "Selected partition: $partition"
+elif [ "$partition_choice" == "any-cpu" ]; then
+    partition=$(_pick_best_partition cpu_part_names)
+    echo "Selected partition: $partition"
+else
+    partition="$partition_choice"
+fi

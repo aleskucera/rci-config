@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 BASHRC_FILE="/home/$(whoami)/.bashrc"
 LOCAL_COMMANDS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")/commands/local"

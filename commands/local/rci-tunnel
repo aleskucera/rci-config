@@ -1,17 +1,24 @@
 #!/bin/bash
+set -euo pipefail
+
+# Usage: rci-tunnel [node] [port]
+# If node/port are not supplied, prompts for them interactively.
+
+node="${1:-}"
+port="${2:-}"
 
 echo ""
 echo "==== Creating SSH Tunnel to RCI Cluster ===="
 echo ""
 
-echo ""
-read -r -p "Enter the RCI node: " node
-read -r -p "Enter the port: " port
-echo ""
+if [ -z "$node" ]; then
+    read -r -p "Enter the RCI node: " node
+fi
+if [ -z "$port" ]; then
+    read -r -p "Enter the port: " port
+fi
 
+echo ""
 echo "Creating SSH tunnel to ${node} on port ${port}..."
 
-ssh -N -L ${port}:${node}:${port} ${RCI_USER}@login.rci.cvut.cz
-
-echo "SSH tunnel created."
-
+ssh -N -L "${port}:${node}:${port}" "${RCI_USER}@login.rci.cvut.cz"

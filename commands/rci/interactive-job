@@ -1,45 +1,109 @@
 #!/bin/bash
+set -euo pipefail
+
+HOME_DIR="/home/$(whoami)"
+LAST_FILE="$HOME_DIR/.interactive-job-last"
 
 echo ""
 echo "==== Running Interactive Job ===="
 echo ""
 
-# Select the partition for the job (gpufast, cpufast, amdfast, amdgpufast)
-partitions=("gpufast" "amdgpufast" "cpufast" "amdfast" )
-
-# Print partition with number line
-for ((i = 1; i <= ${#partitions[@]}; i++)); do
-    echo "[$i] ${partitions[$((i-1))]}"
-done
-
-# Get the number of the partition
-echo ""
-read -r -p "Enter the number of the partition: " partition_number
-
-# Validate user input
-if [ "$partition_number" -lt 1 ] || [ "$partition_number" -gt ${#partitions[@]} ]; then
-    echo "Invalid partition number. Aborting..."
-    exit 1
-fi
-
-# If partition with GPU selected add the --gpus-per-node flag
-partition=${partitions[$((partition_number - 1))]}
-
-if [ "$partition" == "gpufast" ] || [ "$partition" == "amdgpufast" ]; then
+# Offer to reuse last settings
+reuse_last=false
+if [ -f "$LAST_FILE" ]; then
+    echo "Last run:"
+    sed 's/^/  /' "$LAST_FILE"
     echo ""
-    read -r -p "Select the number of GPUs: " gpus
-else
-    gpus=0
+    read -r -p "Reuse these settings? [Y/n] " ans
+    if [[ -z "$ans" || "$ans" =~ ^[yY]$ ]]; then
+        # shellcheck disable=SC1090
+        source "$LAST_FILE"
+        reuse_last=true
+    fi
+    echo ""
 fi
 
-# Select the amount of memory for the job
-echo ""
-read -r -p "Select the amount of memory: " memory
+if [ "$reuse_last" = false ]; then
+    projects=("$HOME_DIR/projects"/*)
+    echo "Choose a project to auto-activate its environment:"
+    echo "[0] No project"
+    for ((i = 1; i <= ${#projects[@]}; i++)); do
+        echo "[$i] $(basename "${projects[$((i-1))]}")"
+    done
+    echo ""
+    read -r -p "Enter the number of the project: " project_number
+    echo ""
 
-# Select the number of CPUs for the job
-echo ""
-read -r -p "Select the number of CPUs: " cpus
+    project_dir=""
+    if [[ "$project_number" =~ ^[0-9]+$ ]] && [ "$project_number" -gt 0 ] && [ "$project_number" -le "${#projects[@]}" ]; then
+        project_dir="${projects[$((project_number - 1))]}"
+    fi
 
-# Run the job
-srun --partition "$partition" --gpus-per-node "$gpus" --cpus-per-task "$cpus" --mem "$memory" --pty bash -i
+    SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+    # shellcheck source=_select-partition
+    source "$SCRIPT_DIR/_select-partition"
 
+    gpus=0
+    if [ "$choice_is_gpu" -eq 1 ]; then
+        echo ""
+        read -r -p "Select the number of GPUs [default=1]: " gpus
+        gpus="${gpus:-1}"
+        if ! [[ "$gpus" =~ ^[0-9]+$ ]] || [ "$gpus" -lt 1 ]; then
+            echo "Invalid number of GPUs. Aborting..."
+            exit 1
+        fi
+    fi
+
+    echo ""
+    read -r -p "Select the amount of memory [default=8G]: " memory
+    memory="${memory:-8G}"
+    if ! [[ "$memory" =~ ^[0-9]+[KMGT]?$ ]]; then
+        echo "Invalid memory value. Aborting..."
+        exit 1
+    fi
+
+    echo ""
+    read -r -p "Select the number of CPUs [default=4]: " cpus
+    cpus="${cpus:-4}"
+    if ! [[ "$cpus" =~ ^[0-9]+$ ]] || [ "$cpus" -lt 1 ]; then
+        echo "Invalid number of CPUs. Aborting..."
+        exit 1
+    fi
+
+    # Save for next time
+    cat > "$LAST_FILE" <<EOF
+project_dir="$project_dir"
+partition="$partition"
+gpus="$gpus"
+memory="$memory"
+cpus="$cpus"
+EOF
+fi
+
+# Re-detect project env on every run (in case .env/.venv was added since last run)
+env_init=""
+if [ -n "${project_dir:-}" ]; then
+    if [ -f "$project_dir/.env" ]; then
+        echo "Detected .env file, will activate on connect."
+        env_init="$project_dir/.env"
+    elif [ -f "$project_dir/.venv/bin/activate" ]; then
+        echo "Detected .venv, will activate on connect."
+        env_init="$project_dir/.venv/bin/activate"
+    else
+        echo "No .env or .venv found, starting with default environment."
+    fi
+fi
+
+gpu_flag=""
+[ "${gpus:-0}" -gt 0 ] && gpu_flag="--gpus-per-node $gpus"
+
+# Run the job, activating the project environment if detected
+if [ -n "$env_init" ]; then
+    tmp_init=$(mktemp "$HOME_DIR/.interactive-job-init.XXXXXX")
+    printf '[ -f ~/.bashrc ] && source ~/.bashrc\nsource "%s"\n' "$env_init" > "$tmp_init"
+    [ -n "$project_dir" ] && printf 'cd "%s"\n' "$project_dir" >> "$tmp_init"
+    srun --partition "$partition" $gpu_flag --cpus-per-task "$cpus" --mem "$memory" --pty bash --init-file "$tmp_init" -i
+    rm -f "$tmp_init"
+else
+    srun --partition "$partition" $gpu_flag --cpus-per-task "$cpus" --mem "$memory" --pty bash -i
+fi

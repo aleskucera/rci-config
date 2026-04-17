@@ -1,7 +1,8 @@
 #!/bin/bash
+set -euo pipefail
 
 # Get the user's jobs queue
-user_jobs=$(squeue -u $USER)
+user_jobs=$(squeue -u "$USER")
 
 # Check if there are no jobs (only the header line is present)
 if [ $(echo "$user_jobs" | wc -l) -eq 1 ]; then

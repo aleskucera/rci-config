@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 HOME_DIR="/home/$(whoami)"
 BASHRC_FILE="$HOME_DIR/.bashrc"
@@ -20,5 +21,5 @@ if grep -q "$RCI_COMMANDS_DIR" "$BASHRC_FILE"; then
 else
     echo "Adding commands directory to the PATH..."
     echo "export PATH=\$PATH:$RCI_COMMANDS_DIR" >> "$BASHRC_FILE"
-    source "$BASHRC_FILE"
+    echo "Please restart your terminal session for the changes to take effect."
 fi

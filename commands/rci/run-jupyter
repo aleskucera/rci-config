@@ -1,112 +1,144 @@
 #!/bin/bash
+set -euo pipefail
 
 PORT=9999
 user=$(whoami)
 HOME_DIR="/home/$user"
 STORAGE_DIR="/mnt/personal/$user"
-NODE_FILE="$HOME_DIR/node-name.tmp"
-LOG_FILE="$HOME_DIR/log-path.tmp"
 SETUP_DIR="$HOME_DIR/rci-config"
 SRC_DIR="$SETUP_DIR/src"
+LAST_FILE="$HOME_DIR/.run-jupyter-last"
 
-# Make sure that the temporary files do not exist
-rm -f "$NODE_FILE"
-rm -f "$LOG_FILE"
-
-# Get the names of the project in the 'projects' directory
-projects=("$HOME_DIR/projects"/*)
+# Per-invocation temp files so concurrent run-jupyter calls don't collide
+NODE_FILE=$(mktemp -t rci-jupyter-node.XXXXXX)
+LOG_FILE=$(mktemp -t rci-jupyter-log.XXXXXX)
+trap 'rm -f "$NODE_FILE" "$LOG_FILE"' EXIT
 
 echo ""
 echo "==== Running Remote Jupyter Kernel ===="
 echo ""
 
-# Print the names of the projects
-echo "Choose the project for which you"
-echo "wish to run the remote Jupyter kernel:"
-echo ""
-
-# Enumerate projects from 1 to n
-for ((i = 1; i <= ${#projects[@]}; i++)); do
-    echo "[$i] $(basename "${projects[$((i-1))]}")"
-done
-
-# Prompt the user to select a project
-echo ""
-read -r -p "Enter the number of the project: " project_number
-echo ""
-
-# Validate user input
-if ! [[ "$project_number" =~ ^[0-9]+$ ]] || [ "$project_number" -lt 1 ] || [ "$project_number" -gt "${#projects[@]}" ]; then
-    echo "ERROR: Invalid input: Please enter a valid number."
-    exit 1
+# Offer to reuse last settings
+reuse_last=false
+if [ -f "$LAST_FILE" ]; then
+    echo "Last run:"
+    sed 's/^/  /' "$LAST_FILE"
+    echo ""
+    read -r -p "Reuse these settings? [Y/n] " ans
+    if [[ -z "$ans" || "$ans" =~ ^[yY]$ ]]; then
+        # shellcheck disable=SC1090
+        source "$LAST_FILE"
+        reuse_last=true
+    fi
+    echo ""
 fi
 
-# Adjust project number to match array indexing
-project_number=$((project_number - 1))
+if [ "$reuse_last" = false ]; then
+    projects=("$HOME_DIR/projects"/*)
+    echo "Choose the project for which you wish to run the remote Jupyter kernel:"
+    echo ""
+    for ((i = 1; i <= ${#projects[@]}; i++)); do
+        echo "[$i] $(basename "${projects[$((i-1))]}")"
+    done
+    echo ""
+    read -r -p "Enter the number of the project: " project_number
+    echo ""
 
-# Get the project directory
-project_dir="${projects[$project_number]}"
+    if ! [[ "$project_number" =~ ^[0-9]+$ ]] || [ "$project_number" -lt 1 ] || [ "$project_number" -gt "${#projects[@]}" ]; then
+        echo "ERROR: Invalid input: Please enter a valid number."
+        exit 1
+    fi
+    project_dir="${projects[$((project_number - 1))]}"
+
+    SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+    # shellcheck source=_select-partition
+    source "$SCRIPT_DIR/_select-partition"
+
+    gpus=0
+    if [ "$choice_is_gpu" -eq 1 ]; then
+        echo ""
+        read -r -p "Number of GPUs [default=1]: " gpus
+        gpus="${gpus:-1}"
+        if ! [[ "$gpus" =~ ^[0-9]+$ ]] || [ "$gpus" -lt 1 ]; then
+            echo "Invalid number of GPUs. Aborting..."
+            exit 1
+        fi
+    fi
+
+    echo ""
+    read -r -p "Memory [default=8G]: " memory
+    memory="${memory:-8G}"
+    if ! [[ "$memory" =~ ^[0-9]+[KMGT]?$ ]]; then
+        echo "Invalid memory value. Aborting..."
+        exit 1
+    fi
+
+    echo ""
+    read -r -p "Number of CPUs [default=4]: " cpus
+    cpus="${cpus:-4}"
+    if ! [[ "$cpus" =~ ^[0-9]+$ ]] || [ "$cpus" -lt 1 ]; then
+        echo "Invalid number of CPUs. Aborting..."
+        exit 1
+    fi
+
+    cat > "$LAST_FILE" <<EOF
+project_dir="$project_dir"
+partition="$partition"
+gpus="$gpus"
+memory="$memory"
+cpus="$cpus"
+EOF
+fi
+
+# Derived values
 project_name=$(basename "$project_dir")
 log_dir="${project_dir}/rci-logs"
 
-# Ask if the user wants to use the .env file or singularity image
-echo "Do you want to use the .env file or the singularity image?"
-echo "[1] .env file"
-echo "[2] Singularity image"
-echo ""
-
-read -r -p "Enter the number of the option: " option
-echo ""
-
+# Re-detect environment on every run (in case .env/.venv was added since last time)
 env_file=null
 singularity_file=null
-
-# If options is 1, use the .env file, if it is 2, use the singularity image
-if [ "$option" -eq 1 ]; then
-    env_file="${projects[$project_number]}/.env"
-    # Check if the project directory contains a .env file
-    if [ ! -f "$env_file" ]; then
-        echo "WARNING: The file .env does not exist in the project directory."
-        read -r -p "Do you want to load base environment? (y/n) " response
-        echo ""
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            env_file="${SETUP_DIR}/envs/base.sh"
-        else
-          echo "Aborting..."
-          exit 1
-        fi
-    fi
-elif [ "$option" -eq 2 ]; then
-    singularity_file="${STORAGE_DIR}/singularity/${project_name}.sif"
-    if [ ! -f "$singularity_file" ]; then
-        echo "WARNING: The file $singularity_file does not exist."
-        read -r -p "Do you want to load base singularity image? (y/n) " response
-        echo ""
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            env_file="${STORAGE_DIR}/singularity/base.sif"
-        else
-          echo "Aborting..."
-          exit 1
-        fi
-    fi
+if [ -f "${project_dir}/.env" ]; then
+    echo "Detected .env file, using it."
+    env_file="${project_dir}/.env"
+elif [ -f "${project_dir}/.venv/bin/activate" ]; then
+    echo "Detected .venv, using it."
+    env_file="${project_dir}/.venv/bin/activate"
 else
-    echo "ERROR: Invalid option."
-    exit 1
+    echo "No .env or .venv found. Choose an environment:"
+    echo "[1] Base environment (modules)"
+    echo "[2] Singularity image"
+    echo ""
+    read -r -p "Enter the number of the option: " option
+    echo ""
+
+    if [ "$option" -eq 1 ]; then
+        env_file="${SETUP_DIR}/envs/base.sh"
+    elif [ "$option" -eq 2 ]; then
+        singularity_file="${STORAGE_DIR}/singularity/${project_name}.sif"
+        if [ ! -f "$singularity_file" ]; then
+            echo "WARNING: The file $singularity_file does not exist."
+            read -r -p "Do you want to load base singularity image? (y/n) " response
+            echo ""
+            if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+                singularity_file="${STORAGE_DIR}/singularity/base.sif"
+            else
+                echo "Aborting..."
+                exit 1
+            fi
+        fi
+    else
+        echo "ERROR: Invalid option."
+        exit 1
+    fi
 fi
 
-# Select number of cpus
-read -r -p "Enter the number of CPUs (default=1): " cpus
-echo ""
-
-# If the user pressed Enter without providing a value, set the number of CPUs to 1
-if [ -z "$cpus" ]; then
-    cpus=1
-fi
-
-# Fill the jinja2 template with the project name and the number of CPUs
-python $SRC_DIR/create_job_file.py \
+# Fill the jinja2 template
+python "$SRC_DIR/create_job_file.py" \
     --port "$PORT" \
     --project_name "$project_name" \
+    --partition "$partition" \
+    --gpus "$gpus" \
+    --memory "$memory" \
     --number_of_cpus "$cpus" \
     --env_file "$env_file" \
     --singularity_file "$singularity_file" \
@@ -115,37 +147,36 @@ python $SRC_DIR/create_job_file.py \
     --log_file "$LOG_FILE" \
     --node_file "$NODE_FILE"
 
-# Submit the job
+# Submit the job, then remove the generated script so jobs/ doesn't accumulate
+# (sbatch reads the script into SLURM at submit time, so deleting is safe)
+job_script="${SETUP_DIR}/jobs/${project_name}.sh"
 echo "Submitting the job..."
-sbatch "${SETUP_DIR}/jobs/${project_name}.sh"
+sbatch "$job_script"
+rm -f "$job_script"
 
-
-# Wait for the node name file to be created
+# Wait until the job-side script populates both temp files
 echo "Waiting for the job to start..."
-while [[ ! -f $NODE_FILE ]] || [[ ! -f $LOG_FILE ]]; do
+while [[ ! -s $NODE_FILE ]] || [[ ! -s $LOG_FILE ]]; do
     sleep 1
 done
-# Read the node name from the file
 node=$(cat "$NODE_FILE")
 log_path=$(cat "$LOG_FILE")
 
-# Remove the temporary files
-rm "$NODE_FILE"
-rm "$LOG_FILE"
-
 echo ""
-echo "Command to create your ssh tunnel:"
-echo -e " ssh -N -L $PORT:$node:$PORT $user@login.rci.cvut.cz"
+echo "On your local machine, run:"
+echo "    rci-tunnel $node $PORT"
+echo "or manually:"
+echo "    ssh -N -L $PORT:$node:$PORT $user@login.rci.cvut.cz"
 
 echo ""
 echo "Then the Jupyter notebook will be available at:"
-echo -e " http://localhost:$PORT"
+echo "    http://localhost:$PORT"
 
 echo ""
-echo "The logs are available at:"
-echo " $log_path"
+echo "Logs:"
+echo "    $log_path"
+echo "(or run \`job-logs\` on RCI)"
 
 echo ""
 echo "==== Remote Jupyter Kernel Running ===="
 echo ""
-

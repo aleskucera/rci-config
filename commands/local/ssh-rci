@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
-ssh ${RCI_USER}@login3.rci.cvut.cz
+ssh "${RCI_USER}@login3.rci.cvut.cz"
 

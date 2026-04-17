@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+
+# shellcheck source=_select-job
+source "$SCRIPT_DIR/_select-job" "Enter the number of the job to tail logs for"
+
+log_path=$(scontrol show job "$job_id" 2>/dev/null | grep -oP 'StdOut=\K\S+' || true)
+
+if [ -z "$log_path" ]; then
+    echo "Could not determine log file for job $job_id."
+    exit 1
+fi
+
+if [ ! -f "$log_path" ]; then
+    echo "Log file does not exist yet: $log_path"
+    echo "The job may not have started or produced output yet."
+    exit 1
+fi
+
+echo ""
+echo "Tailing $log_path (Ctrl-C to stop)..."
+echo ""
+tail -n +1 -f "$log_path"

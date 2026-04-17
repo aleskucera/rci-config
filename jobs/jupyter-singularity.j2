@@ -1,8 +1,11 @@
 #!/bin/bash
-#SBATCH --partition gpu
-#SBATCH --gpus-per-node 1
+#SBATCH --partition {{ partition }}
+{% if gpus > 0 -%}
+#SBATCH --gpus-per-node {{ gpus }}
+{% endif -%}
 #SBATCH --nodes 1
 #SBATCH --ntasks-per-node {{ number_of_cpus }}
+#SBATCH --mem {{ memory }}
 #SBATCH --time 1-0:00:00
 #SBATCH --job-name jupyter-{{ project_name }}
 #SBATCH --output {{ log_dir }}/jupyter-%j.log
@@ -12,7 +15,7 @@ user=$(whoami)
 
 # Add project directory to the python path
 export PYTHONPATH={{ project_dir }}:$PYTHONPATH
-export BASE_PATH="/mnt/personal/${user}/{{ project_dir }}"
+export BASE_PATH="/mnt/personal/${user}/{{ project_name }}"
 
 # Paste the node name and job id to the temporary files
 echo ${node} > {{ node_file }}
@@ -22,4 +25,4 @@ echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
 source {{ env_file }}
 
 # Run Jupyter
-singularity run --nv --bind /mnt:/mnt {{ singularity_file }} jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+singularity run {% if gpus > 0 %}--nv {% endif %}--bind /mnt:/mnt {{ singularity_file }} jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
