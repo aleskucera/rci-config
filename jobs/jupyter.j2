@@ -26,4 +26,23 @@ source {{ env_file }}
 
 # Run Jupyter
 # jupyter notebook --no-browser --port={{ port }} --ip=${node} --NotebookApp.token='' --NotebookApp.password='' --allow-root
-jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+#
+# `command -v jupyter` is not enough to know `jupyter notebook` will work:
+# newer JupyterLab modules (e.g. JupyterLab/4.4.9-GCCcore-14.3.0, the
+# cluster default as of writing) ship the `jupyter` dispatcher but not the
+# classic `notebook` package, so the "notebook" subcommand doesn't exist -
+# `jupyter notebook --help` correctly fails there while `command -v jupyter`
+# would wrongly succeed. Probe each command directly, in order of
+# preference, and fall back to `jupyter lab` (JupyterLab's own UI, always
+# available wherever `jupyter lab --help` succeeds) if neither notebook
+# variant is installed.
+if jupyter notebook --help &>/dev/null; then
+  jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif jupyter-notebook --help &>/dev/null; then
+  jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif jupyter lab --help &>/dev/null; then
+  jupyter lab --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+else
+  echo "Error: Jupyter is not available in this environment."
+  exit 1
+fi

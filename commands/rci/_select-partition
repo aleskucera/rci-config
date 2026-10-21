@@ -1,7 +1,9 @@
 #!/bin/bash
 # Shared helper: dynamically list interactive-capable (fast) partitions,
-# show availability, prompt for selection, and resolve "any-gpu" / "any-cpu"
-# to the fast partition with the most idle nodes.
+# show availability (idle/total GPUs for GPU partitions, idle/total CPUs
+# for CPU partitions, plus the max CPUs/GPUs allocatable right now), prompt
+# for selection, and resolve "any-gpu" / "any-cpu" to the fast partition with
+# the most idle GPUs / CPUs.
 #
 # On success, sets:
 #   $partition      - final partition name (single, for SLURM submission)
@@ -12,10 +14,14 @@
 
 declare -a partitions=()
 declare -a partition_is_gpu=()
+declare -A partition_limit
+declare -A partition_gres
 
-while read -r name gres; do
+while read -r name gres limit; do
     name="${name%\*}"
     partitions+=("$name")
+    partition_limit["$name"]="$limit"
+    partition_gres["$name"]="$gres"
     if [[ "$gres" == *"gpu:"* ]]; then
         partition_is_gpu+=(1)
     else
@@ -24,10 +30,11 @@ while read -r name gres; do
 done < <(sinfo --noheader --format="%P %G %a %l" 2>/dev/null \
     | awk '
         function to_min(t,   a, b) {
+            if (t == "infinite" || t == "not_set" || t == "n/a" || t == "") return 999999
             if (t ~ /-/) { split(t, a, "-"); split(a[2], b, ":"); return a[1]*1440 + b[1]*60 + b[2] }
             split(t, b, ":"); return b[1]*60 + b[2]
         }
-        $3 == "up" && to_min($4) <= 240 { print $1, $2 }
+        $3 == "up" && to_min($4) <= 240 { print $1, $2, $4 }
     ' | sort -u -k1,1)
 
 if [ "${#partitions[@]}" -eq 0 ]; then
@@ -44,37 +51,97 @@ for ((i = 0; i < ${#partitions[@]}; i++)); do
         cpu_part_names+=("${partitions[$i]}")
     fi
 done
-[ ${#gpu_part_names[@]} -gt 0 ] && partitions+=("any-gpu") && partition_is_gpu+=(1)
-[ ${#cpu_part_names[@]} -gt 0 ] && partitions+=("any-cpu") && partition_is_gpu+=(0)
 
-echo "Partition availability:"
+# Per-node free CPU/GPU counts, summed per partition, from `scontrol show
+# node` rather than sinfo's per-node aggregate state. On a shared cluster
+# nodes are almost always "mixed" (partially allocated) rather than fully
+# "idle", so counting only whole-idle nodes (as sinfo states would) hides
+# real free capacity - a "mixed" node can still have free GPUs/CPUs.
+# "max" is the most a single allocation could get: a job's CPUs/GPUs come
+# from one node, so it's the largest free CPU/GPU count on any one node in
+# the partition (matches rci_load's CPU_M/GPU_M columns), not the
+# partition-wide sum.
+fast_csv=$(IFS=,; echo "${partitions[*]}")
 declare -A idle_counts
-while IFS= read -r line; do
-    echo "$line"
-    name=$(echo "$line" | awk '{print $1}' | xargs)
-    idle=$(echo "$line" | grep -oP 'idle=\K[0-9]+' || true)
-    idle_counts["$name"]="${idle:-0}"
-done < <(sinfo --noheader --format="%P %t %D %l %G" 2>/dev/null \
-    | awk '
-        function to_min(t,   a, b) {
-            if (t ~ /-/) { split(t, a, "-"); split(a[2], b, ":"); return a[1]*1440 + b[1]*60 + b[2] }
-            split(t, b, ":"); return b[1]*60 + b[2]
+declare -A total_counts
+declare -A unit_of
+declare -A max_counts
+while IFS=$'\t' read -r name idle total unit max; do
+    idle_counts["$name"]="$idle"
+    total_counts["$name"]="$total"
+    unit_of["$name"]="$unit"
+    max_counts["$name"]="$max"
+done < <(scontrol show node --oneliner 2>/dev/null \
+    | awk -v fast_csv="$fast_csv" '
+        function getval(line, key,    re, tmp) {
+            re = key "=[^ ]*"
+            if (match(line, re)) {
+                tmp = substr(line, RSTART, RLENGTH)
+                sub("^" key "=", "", tmp)
+                return tmp
+            }
+            return ""
+        }
+        function numfield(s, key,    re, tmp) {
+            re = key "=[0-9]+"
+            if (match(s, re)) {
+                tmp = substr(s, RSTART, RLENGTH)
+                sub("^.*" key "=", "", tmp)
+                return tmp + 0
+            }
+            return 0
+        }
+        BEGIN {
+            n = split(fast_csv, f, ",")
+            for (i = 1; i <= n; i++) is_fast[f[i]] = 1
         }
         {
-            p = $1; sub(/\*$/, "", p)
-            state = $2; count = $3
-            if (to_min($4) > 240) next
-            if (state == "idle") idle[p] += count
-            total[p] += count
-            gres[p] = $5; limit[p] = $4
+            state = getval($0, "State")
+            state_clean = tolower(state); gsub(/[^a-z]/, "", state_clean)
+            # Unanchored: catches compound states like "mixed+drain" too.
+            if (state_clean ~ /down|drain|drng|fail|failg|maint/) next
+
+            cfg = getval($0, "CfgTRES")
+            alloc = getval($0, "AllocTRES")
+            cpu_free = numfield(cfg, "cpu") - numfield(alloc, "cpu")
+            gpu_total = numfield(cfg, "gpu")
+            gpu_free = gpu_total - numfield(alloc, "gpu")
+
+            n = split(getval($0, "Partitions"), plist, ",")
+            for (i = 1; i <= n; i++) {
+                p = plist[i]
+                if (!(p in is_fast)) continue
+                if (gpu_total > 0) is_gpu[p] = 1
+                total_gpus[p] += gpu_total
+                idle_gpus[p] += gpu_free
+                if (gpu_free > max_gpus_node[p]) max_gpus_node[p] = gpu_free
+                if (cpu_free > max_cpus_node[p]) max_cpus_node[p] = cpu_free
+                total_nodes[p] += 1
+                # Idle-or-mixed: any node still able to take another job.
+                if (cpu_free > 0) idle_nodes[p] += 1
+                seen[p] = 1
+            }
         }
         END {
-            for (p in total)
-                printf "  %-16s  idle=%-3d  total=%-3d  limit=%-12s  gres=%s\n",
-                    p, idle[p]+0, total[p], limit[p], gres[p]
+            for (p in seen) {
+                if (is_gpu[p]) printf "%s\t%d\t%d\t%s\t%d\n", p, idle_gpus[p], total_gpus[p], "gpus", max_gpus_node[p]
+                else            printf "%s\t%d\t%d\t%s\t%d\n", p, idle_nodes[p], total_nodes[p], "nodes", max_cpus_node[p]
+            }
         }
-    ' | sort)
+    ')
+
+echo "Partition availability:"
+for name in "${partitions[@]}"; do
+    printf "  %-16s  idle=%-3d %-5s  max=%-4d  total=%-3d %-5s  limit=%-12s  gres=%s\n" \
+        "$name" "${idle_counts[$name]:-0}" "${unit_of[$name]:-}" \
+        "${max_counts[$name]:-0}" \
+        "${total_counts[$name]:-0}" "${unit_of[$name]:-}" \
+        "${partition_limit[$name]}" "${partition_gres[$name]}"
+done | sort
 echo ""
+
+[ ${#gpu_part_names[@]} -gt 0 ] && partitions+=("any-gpu") && partition_is_gpu+=(1)
+[ ${#cpu_part_names[@]} -gt 0 ] && partitions+=("any-cpu") && partition_is_gpu+=(0)
 
 _pick_best_partition() {
     local -n _names=$1

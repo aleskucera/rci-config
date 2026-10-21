@@ -21,8 +21,22 @@ export BASE_PATH="/mnt/personal/${user}/{{ project_name }}"
 echo ${node} > {{ node_file }}
 echo "{{ log_dir }}/jupyter-${SLURM_JOB_ID}.log" > {{ log_file }}
 
-# Load modules
-source {{ env_file }}
-
 # Run Jupyter
-singularity run {% if gpus > 0 %}--nv {% endif %}--bind /mnt:/mnt {{ singularity_file }} jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+#
+# `command -v jupyter` only proves the dispatcher exists, not that the
+# "notebook" subcommand does - some JupyterLab installs ship `jupyter` but
+# not the classic `notebook` package. Probe each command directly, in order
+# of preference, falling back to `jupyter lab` if neither notebook variant
+# is present in the image.
+singularity run {% if gpus > 0 %}--nv {% endif %}--bind /mnt:/mnt {{ singularity_file }} bash -c "
+if jupyter notebook --help &> /dev/null; then
+    jupyter notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif jupyter-notebook --help &> /dev/null; then
+    jupyter-notebook --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+elif jupyter lab --help &> /dev/null; then
+    jupyter lab --no-browser --port={{ port }} --ip=${node} --notebook-dir={{ project_dir }}
+else
+    echo 'Error: No working jupyter notebook/jupyter-notebook/jupyter lab command found inside the container.'
+    exit 1
+fi
+"

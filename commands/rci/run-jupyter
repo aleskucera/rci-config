@@ -9,9 +9,12 @@ SETUP_DIR="$HOME_DIR/rci-config"
 SRC_DIR="$SETUP_DIR/src"
 LAST_FILE="$HOME_DIR/.run-jupyter-last"
 
-# Per-invocation temp files so concurrent run-jupyter calls don't collide
-NODE_FILE=$(mktemp -t rci-jupyter-node.XXXXXX)
-LOG_FILE=$(mktemp -t rci-jupyter-log.XXXXXX)
+# Per-invocation temp files so concurrent run-jupyter calls don't collide.
+# Must live under $HOME_DIR (NFS, shared with compute nodes) rather than
+# /tmp (local per-node) since the job script on the compute node needs to
+# write to the same file this (login-node) process polls below.
+NODE_FILE=$(mktemp -p "$HOME_DIR" .rci-jupyter-node.XXXXXX)
+LOG_FILE=$(mktemp -p "$HOME_DIR" .rci-jupyter-log.XXXXXX)
 trap 'rm -f "$NODE_FILE" "$LOG_FILE"' EXIT
 
 echo ""
@@ -151,12 +154,27 @@ python "$SRC_DIR/create_job_file.py" \
 # (sbatch reads the script into SLURM at submit time, so deleting is safe)
 job_script="${SETUP_DIR}/jobs/${project_name}.sh"
 echo "Submitting the job..."
-sbatch "$job_script"
+job_id=$(sbatch --parsable "$job_script")
+job_id="${job_id%%;*}"  # --parsable prints "jobid;cluster" if a cluster name is present
 rm -f "$job_script"
+echo "Submitted batch job $job_id"
 
-# Wait until the job-side script populates both temp files
+# Wait until the job-side script populates both temp files. Also bail out if
+# the job itself has left the queue (failed/cancelled/timed out) before doing
+# so, otherwise a broken job (e.g. missing singularity image, bad env file)
+# leaves this loop spinning forever with no feedback.
 echo "Waiting for the job to start..."
 while [[ ! -s $NODE_FILE ]] || [[ ! -s $LOG_FILE ]]; do
+    if ! squeue -j "$job_id" -h &>/dev/null; then
+        echo ""
+        echo "ERROR: Job $job_id is no longer in the queue but never started."
+        expected_log="${log_dir}/jupyter-${job_id}.log"
+        if [ -f "$expected_log" ]; then
+            echo "Last lines of $expected_log:"
+            tail -n 20 "$expected_log"
+        fi
+        exit 1
+    fi
     sleep 1
 done
 node=$(cat "$NODE_FILE")

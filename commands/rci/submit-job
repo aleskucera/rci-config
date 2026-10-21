@@ -1,0 +1,183 @@
+#!/bin/bash
+set -euo pipefail
+
+# Usage: submit-job
+# Run from inside a project directory (like plain `sbatch` - paths and the
+# generated script are relative to $PWD, not ~/projects/<name>). Targets the
+# common case of "run one command with N GPUs on some partition"; jobs that
+# need --array or multiple backgrounded processes are still better off as a
+# hand-written .batch file.
+
+PROJECT_DIR="$PWD"
+PROJECT_NAME="$(basename "$PROJECT_DIR")"
+LOG_DIR="${PROJECT_DIR}/slurm/out"
+GEN_DIR="${PROJECT_DIR}/slurm/generated"
+LAST_FILE="$HOME/.submit-job-last"
+
+echo ""
+echo "==== Submitting a Batch Job ===="
+echo "Project: $PROJECT_NAME ($PROJECT_DIR)"
+echo ""
+
+read -r -p "Command to run (e.g. python3 train.py --epochs 10): " command
+if [ -z "$command" ]; then
+    echo "No command given. Aborting..."
+    exit 1
+fi
+
+# Derive a default job name from the command: first token that isn't an
+# interpreter/launcher, basename without extension - e.g.
+# "python3 train.py --x" -> "train". Falls back to "job" if that fails.
+default_name=$(printf '%s\n' "$command" | awk '{
+    for (i = 1; i <= NF; i++) {
+        if ($i !~ /^(python3?|bash|sh|srun)$/) { print $i; exit }
+    }
+}')
+default_name=$(basename "${default_name:-job}")
+default_name="${default_name%.*}"
+default_name="${default_name:-job}"
+
+read -r -p "Job name [default=${default_name}]: " job_name
+job_name="${job_name:-$default_name}"
+echo ""
+
+# Offer to reuse last resource settings (partition/gpus/memory/cpus/time/
+# mail). The command and job name above are always asked fresh since they
+# change per submission.
+reuse_last=false
+if [ -f "$LAST_FILE" ]; then
+    echo "Last resource settings:"
+    sed 's/^/  /' "$LAST_FILE"
+    echo ""
+    read -r -p "Reuse these settings? [Y/n] " ans
+    if [[ -z "$ans" || "$ans" =~ ^[yY]$ ]]; then
+        # shellcheck disable=SC1090
+        source "$LAST_FILE"
+        reuse_last=true
+    fi
+    echo ""
+fi
+
+if [ "$reuse_last" = false ]; then
+    SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+    # shellcheck source=_select-partition
+    source "$SCRIPT_DIR/_select-partition"
+
+    gpus=0
+    if [ "$choice_is_gpu" -eq 1 ]; then
+        echo ""
+        read -r -p "Number of GPUs [default=1]: " gpus
+        gpus="${gpus:-1}"
+        if ! [[ "$gpus" =~ ^[0-9]+$ ]] || [ "$gpus" -lt 1 ]; then
+            echo "Invalid number of GPUs. Aborting..."
+            exit 1
+        fi
+    fi
+
+    echo ""
+    read -r -p "Memory [default=32G]: " memory
+    memory="${memory:-32G}"
+    if ! [[ "$memory" =~ ^[0-9]+[KMGT]?$ ]]; then
+        echo "Invalid memory value. Aborting..."
+        exit 1
+    fi
+
+    echo ""
+    read -r -p "Number of CPUs [default=8]: " cpus
+    cpus="${cpus:-8}"
+    if ! [[ "$cpus" =~ ^[0-9]+$ ]] || [ "$cpus" -lt 1 ]; then
+        echo "Invalid number of CPUs. Aborting..."
+        exit 1
+    fi
+
+    echo ""
+    read -r -p "Time limit [default=4:00:00]: " time_limit
+    time_limit="${time_limit:-4:00:00}"
+    if ! [[ "$time_limit" =~ ^([0-9]+-)?[0-9]{1,3}:[0-9]{2}:[0-9]{2}$ ]]; then
+        echo "Invalid time limit (expected [D-]H:MM:SS). Aborting..."
+        exit 1
+    fi
+
+    echo ""
+    read -r -p "Email notifications on job start/end? [Y/n] " mail_ans
+    if [[ -z "$mail_ans" || "$mail_ans" =~ ^[yY]$ ]]; then
+        mail_enabled=true
+        read -r -p "Notification email [default=${USER}@fel.cvut.cz]: " mail_user
+        mail_user="${mail_user:-${USER}@fel.cvut.cz}"
+    else
+        mail_enabled=false
+        mail_user=""
+    fi
+
+    cat > "$LAST_FILE" <<EOF
+partition="$partition"
+gpus="$gpus"
+memory="$memory"
+cpus="$cpus"
+time_limit="$time_limit"
+mail_enabled="$mail_enabled"
+mail_user="$mail_user"
+EOF
+fi
+
+# Auto-detect environment - same convention as interactive-job/run-jupyter
+env_file=""
+if [ -f "${PROJECT_DIR}/.env" ]; then
+    echo "Detected .env file, will source it in the job."
+    env_file="${PROJECT_DIR}/.env"
+elif [ -f "${PROJECT_DIR}/.venv/bin/activate" ]; then
+    echo "Detected .venv, will activate it in the job."
+    env_file="${PROJECT_DIR}/.venv/bin/activate"
+else
+    echo "No .env or .venv found; job will run with the default environment."
+fi
+
+mkdir -p "$LOG_DIR" "$GEN_DIR"
+job_script="${GEN_DIR}/${job_name}.sh"
+
+{
+    echo "#!/bin/bash"
+    echo "#SBATCH --job-name ${job_name}"
+    echo "#SBATCH --partition ${partition}"
+    [ "$gpus" -gt 0 ] && echo "#SBATCH --gres=gpu:${gpus}"
+    echo "#SBATCH --nodes 1"
+    echo "#SBATCH --ntasks-per-node 1"
+    echo "#SBATCH --cpus-per-task ${cpus}"
+    echo "#SBATCH --mem ${memory}"
+    echo "#SBATCH --time ${time_limit}"
+    echo "#SBATCH --output ${LOG_DIR}/${job_name}-%j.out"
+    echo "#SBATCH --error ${LOG_DIR}/${job_name}-%j.err"
+    if [ "${mail_enabled:-false}" = true ] && [ -n "${mail_user:-}" ]; then
+        echo "#SBATCH --mail-user ${mail_user}"
+        echo "#SBATCH --mail-type ALL"
+    fi
+    echo ""
+    echo "cd \"${PROJECT_DIR}\""
+    if [ -n "$env_file" ]; then
+        echo "source \"${env_file}\""
+    fi
+    echo ""
+    echo "$command"
+} > "$job_script"
+
+echo ""
+echo "Submitting the job..."
+job_id=$(sbatch --parsable "$job_script")
+job_id="${job_id%%;*}"  # --parsable prints "jobid;cluster" if a cluster name is present
+
+# Keep a permanent, job-id-tagged copy of exactly what was submitted, unlike
+# run-jupyter's throwaway script - batch jobs benefit from a reproducible
+# record of what actually ran.
+final_script="${GEN_DIR}/${job_name}-${job_id}.sh"
+mv "$job_script" "$final_script"
+
+echo "Submitted batch job $job_id"
+echo ""
+echo "Logs:"
+echo "    ${LOG_DIR}/${job_name}-${job_id}.out"
+echo "    ${LOG_DIR}/${job_name}-${job_id}.err"
+echo "(or run \`job-logs\` / \`job-history\`)"
+echo ""
+echo "Submitted script saved to:"
+echo "    ${final_script}"
+echo ""

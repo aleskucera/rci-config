@@ -100,10 +100,14 @@ gpu_flag=""
 # Run the job, activating the project environment if detected
 if [ -n "$env_init" ]; then
     tmp_init=$(mktemp "$HOME_DIR/.interactive-job-init.XXXXXX")
+    # Use a trap (not a plain rm after srun) so the temp file is still
+    # cleaned up if srun/the shell exits non-zero - e.g. the interactive
+    # session's last command failed, or the allocation itself fails -
+    # which would otherwise skip a trailing `rm` under `set -e`.
+    trap 'rm -f "$tmp_init"' EXIT
     printf '[ -f ~/.bashrc ] && source ~/.bashrc\nsource "%s"\n' "$env_init" > "$tmp_init"
     [ -n "$project_dir" ] && printf 'cd "%s"\n' "$project_dir" >> "$tmp_init"
     srun --partition "$partition" $gpu_flag --cpus-per-task "$cpus" --mem "$memory" --pty bash --init-file "$tmp_init" -i
-    rm -f "$tmp_init"
 else
     srun --partition "$partition" $gpu_flag --cpus-per-task "$cpus" --mem "$memory" --pty bash -i
 fi

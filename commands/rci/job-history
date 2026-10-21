@@ -1,0 +1,301 @@
+#!/bin/bash
+set -euo pipefail
+
+# Usage: job-history [days] [filters]
+# Shows finished/failed/cancelled jobs, not just what's currently queued
+# (that's what my-jobs is for). sacct only reports today's jobs unless you
+# give it an explicit start time, hence the [days] window below.
+#
+# Filtering is done here rather than by sacct on purpose:
+#   - MaxRSS only exists on the ".batch" sub-step row, and that row has an
+#     empty Partition field, so `sacct -r <part>` would work but leaves the
+#     merge below fragile for no gain.
+#   - `sacct -s <state>` silently returns nothing unless an explicit -E end
+#     time is also passed.
+#   - Neither has an "omit these" equivalent.
+# Doing it in awk gives one code path for both dimensions and both directions.
+
+usage() {
+    cat <<'EOF'
+Usage: job-history [days] [filters]
+
+  days                          window to look back over (default: 14)
+
+  -p, --partition LIST          show only these partitions (comma-separated)
+      --exclude-partition LIST  omit these partitions
+  -s, --state LIST              show only these states (comma-separated)
+      --exclude-state LIST      omit these states
+  -h, --help                    show this help
+
+States accept SLURM's names, its two-letter codes and a few aliases, case
+insensitively - e.g. completed/cd, failed/f, cancelled/canceled/ca,
+running/r, pending/pd, timeout/to, out_of_memory/oom.
+
+Examples:
+  job-history 30 -p amdgpu                  # only amdgpu jobs
+  job-history 7 -s failed,timeout           # only what went wrong
+  job-history --exclude-state completed     # everything that didn't succeed
+  job-history 7 -p amdgpu --exclude-state completed
+EOF
+}
+
+DAYS=""
+inc_part=""
+exc_part=""
+inc_state=""
+exc_state=""
+CANON_STATE=""
+NORM_STATES=""
+
+# Collect a comma-separated list, appending so a flag can be repeated.
+append_list() {
+    local current="$1" addition="$2"
+    if [ -z "$current" ]; then
+        printf '%s' "$addition"
+    else
+        printf '%s,%s' "$current" "$addition"
+    fi
+}
+
+require_value() {
+    if [ "$2" -eq 0 ] || [ -z "$3" ]; then
+        echo "Option $1 requires a value." >&2
+        exit 1
+    fi
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -p|--partition)
+            require_value "$1" $(($# - 1)) "${2:-}"
+            inc_part=$(append_list "$inc_part" "$2")
+            shift 2
+            ;;
+        --exclude-partition)
+            require_value "$1" $(($# - 1)) "${2:-}"
+            exc_part=$(append_list "$exc_part" "$2")
+            shift 2
+            ;;
+        -s|--state)
+            require_value "$1" $(($# - 1)) "${2:-}"
+            inc_state=$(append_list "$inc_state" "$2")
+            shift 2
+            ;;
+        --exclude-state)
+            require_value "$1" $(($# - 1)) "${2:-}"
+            exc_state=$(append_list "$exc_state" "$2")
+            shift 2
+            ;;
+        [0-9]*)
+            if ! [[ "$1" =~ ^[0-9]+$ ]]; then
+                echo "Invalid day count: $1" >&2
+                usage >&2
+                exit 1
+            fi
+            if [ -n "$DAYS" ]; then
+                echo "Day count given more than once ($DAYS and $1)." >&2
+                exit 1
+            fi
+            DAYS="$1"
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+DAYS="${DAYS:-14}"
+
+if [ -n "$inc_part" ] && [ -n "$exc_part" ]; then
+    echo "Use either --partition or --exclude-partition, not both." >&2
+    exit 1
+fi
+if [ -n "$inc_state" ] && [ -n "$exc_state" ]; then
+    echo "Use either --state or --exclude-state, not both." >&2
+    exit 1
+fi
+
+# The state vocabulary is fixed and finite, so a typo should be a hard error
+# listing the valid names rather than a silently empty table. Partitions get
+# no such check: a job in the window may sit on a partition that no longer
+# exists in sinfo, so there is nothing safe to validate against.
+VALID_STATES="BOOT_FAIL CANCELLED COMPLETED DEADLINE FAILED NODE_FAIL \
+OUT_OF_MEMORY PENDING PREEMPTED REQUEUED RESIZING REVOKED RUNNING SUSPENDED \
+TIMEOUT"
+
+# Sets CANON_STATE; returns non-zero (rather than exiting) so the caller can
+# propagate the failure - an `exit` here would only ever kill a subshell.
+canonical_state() {
+    local s
+    s=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+    case "$s" in
+        BF)        s=BOOT_FAIL ;;
+        CA|CANCELED) s=CANCELLED ;;
+        CD|COMP)   s=COMPLETED ;;
+        DL)        s=DEADLINE ;;
+        F)         s=FAILED ;;
+        NF)        s=NODE_FAIL ;;
+        OOM)       s=OUT_OF_MEMORY ;;
+        PD)        s=PENDING ;;
+        PR)        s=PREEMPTED ;;
+        RQ)        s=REQUEUED ;;
+        RS)        s=RESIZING ;;
+        RV)        s=REVOKED ;;
+        R)         s=RUNNING ;;
+        S)         s=SUSPENDED ;;
+        TO)        s=TIMEOUT ;;
+    esac
+    # shellcheck disable=SC2076
+    if ! [[ " $VALID_STATES " =~ " $s " ]]; then
+        echo "Unknown job state: $1" >&2
+        echo "Valid states: $(echo $VALID_STATES | tr ' ' ',')" >&2
+        echo "(aliases: canceled, cd, comp, f, ca, r, pd, to, oom, nf, pr, rq, s, bf, dl, rv)" >&2
+        return 1
+    fi
+    CANON_STATE="$s"
+}
+
+# Resolve every requested state to its canonical spelling up front, so awk only
+# ever compares like with like. Result lands in NORM_STATES rather than on
+# stdout: a command substitution here would swallow the validation failure and
+# silently turn a typo'd state into "no filter at all".
+normalize_state_list() {
+    local out="" item
+    local IFS=','
+    for item in $1; do
+        if [ -n "$item" ]; then
+            canonical_state "$item" || exit 1
+            out=$(append_list "$out" "$CANON_STATE")
+        fi
+    done
+    NORM_STATES="$out"
+}
+
+normalize_state_list "$inc_state"; inc_state="$NORM_STATES"
+normalize_state_list "$exc_state"; exc_state="$NORM_STATES"
+
+# Describe the active filters for the report header.
+filter_desc=""
+[ -n "$inc_part" ] && filter_desc=$(append_list "$filter_desc" "partition: $inc_part")
+[ -n "$exc_part" ] && filter_desc=$(append_list "$filter_desc" "partition: not $exc_part")
+[ -n "$inc_state" ] && filter_desc=$(append_list "$filter_desc" "state: $inc_state")
+[ -n "$exc_state" ] && filter_desc=$(append_list "$filter_desc" "state: not $exc_state")
+[ -n "$filter_desc" ] && filter_desc=", $filter_desc"
+
+raw=$(sacct -u "$USER" -S "now-${DAYS}days" -P --noheader \
+    --format=JobID,JobName%30,Partition,State,ExitCode,Elapsed,Start,ReqMem,MaxRSS,AllocCPUS,AllocTRES 2>/dev/null)
+
+if [ -z "$raw" ]; then
+    echo "No jobs found in the last $DAYS day(s) for user $USER"
+    exit 0
+fi
+
+echo "$raw" | awk -F'|' \
+    -v user="$USER" -v days="$DAYS" -v filter_desc="$filter_desc" \
+    -v inc_part="$inc_part" -v exc_part="$exc_part" \
+    -v inc_state="$inc_state" -v exc_state="$exc_state" '
+    # MaxRSS is only ever populated on the ".batch" sub-step, never on the
+    # parent JobID row, so pull it from there and merge it back in.
+    function gpus_from_tres(t,   n, parts, i) {
+        n = split(t, parts, ",")
+        for (i = 1; i <= n; i++)
+            if (parts[i] ~ /^gres\/gpu=/) { sub(/^gres\/gpu=/, "", parts[i]); return parts[i] }
+        return "-"
+    }
+    # sacct auto-scales MaxRSS unit per row (K, M or G) once the value is
+    # large enough, so raw values are not directly comparable - normalize
+    # everything to MiB.
+    function mem_to_mib(s,   unit, num) {
+        if (s == "" || s == "-") return "-"
+        unit = substr(s, length(s), 1)
+        num = substr(s, 1, length(s) - 1) + 0
+        if (unit == "K") return sprintf("%dM", num / 1024)
+        if (unit == "M") return sprintf("%dM", num)
+        if (unit == "G") return sprintf("%dM", num * 1024)
+        return s
+    }
+    function fill_set(list, set,   n, parts, i) {
+        n = split(list, parts, ",")
+        for (i = 1; i <= n; i++)
+            if (parts[i] != "") set[parts[i]] = 1
+        return n
+    }
+    # An include list keeps only what is listed; an exclude list drops what is
+    # listed. Empty lists mean "no opinion".
+    function passes(value, inc, exc) {
+        if (length(inc) > 0) return (value in inc)
+        if (length(exc) > 0) return !(value in exc)
+        return 1
+    }
+    function sorted_keys(set,   keys, k, n, i, j, tmp, out) {
+        n = 0
+        for (k in set) keys[++n] = k
+        for (i = 2; i <= n; i++)          # insertion sort; these sets are tiny
+            for (j = i; j > 1 && keys[j-1] > keys[j]; j--) {
+                tmp = keys[j-1]; keys[j-1] = keys[j]; keys[j] = tmp
+            }
+        out = ""
+        for (i = 1; i <= n; i++) out = out (i > 1 ? ", " : "") keys[i]
+        return out
+    }
+    BEGIN {
+        fill_set(inc_part, inc_part_set); fill_set(exc_part, exc_part_set)
+        fill_set(inc_state, inc_state_set); fill_set(exc_state, exc_state_set)
+        fmt = "%-10s  %-24s  %-11s  %-13s  %-6s  %-9s  %-5s  %-5s  %-9s/%-9s  %-19s\n"
+    }
+    {
+        id = $1
+        if (id ~ /\.batch$/) {
+            base = id; sub(/\.batch$/, "", base)
+            if ($9 != "") maxrss[base] = mem_to_mib($9)
+            next
+        }
+        if (id ~ /\./) next  # skip other steps (.extern, .0, ...)
+
+        order[++n] = id
+        name[id] = $2; part[id] = $3; exitcode[id] = $5
+        elapsed[id] = $6; start[id] = $7
+        reqmem[id] = ($8 == "" ? "-" : $8)
+        cpus[id] = $10
+        gpus[id] = gpus_from_tres($11)
+
+        # Cancelled jobs report "CANCELLED by <uid>", which both breaks column
+        # alignment and would never match a plain "CANCELLED" filter - keep
+        # just the state itself.
+        split($4, st, " ")
+        state[id] = st[1]
+
+        seen_part[part[id]] = 1
+        seen_state[state[id]] = 1
+    }
+    END {
+        matched = 0
+        for (i = n; i >= 1; i--) {
+            id = order[i]
+            if (!passes(part[id], inc_part_set, exc_part_set)) continue
+            if (!passes(state[id], inc_state_set, exc_state_set)) continue
+
+            if (++matched == 1) {
+                printf "Job history for user %s (last %s day(s)%s):\n", user, days, filter_desc
+                print ""
+                printf fmt, "JOBID", "NAME", "PARTITION", "STATE", "EXIT", "ELAPSED",
+                    "CPUS", "GPUS", "REQ-MEM", "PEAK-MEM", "START"
+            }
+            printf fmt, id, name[id], part[id], state[id], exitcode[id], elapsed[id],
+                cpus[id], gpus[id], reqmem[id], (id in maxrss ? maxrss[id] : "-"), start[id]
+        }
+
+        if (matched == 0) {
+            printf "No jobs matched in the last %s day(s)%s\n", days, filter_desc
+            printf "  partitions in this window: %s\n", sorted_keys(seen_part)
+            printf "  states in this window:     %s\n", sorted_keys(seen_state)
+        }
+    }
+'
